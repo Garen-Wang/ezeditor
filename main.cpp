@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <stdarg.h>
+#include <fcntl.h>
 #include <time.h>
 #include <stdio.h>
 
@@ -31,6 +32,7 @@ const size_t MAXBUF = 128;
 const size_t TAB_SPACE_LENGTH = 4;
 
 enum editor_keys {
+    BACKSPACE = 127,
     CURSOR_UP = 1314,
     CURSOR_DOWN,
     CURSOR_LEFT,
@@ -55,15 +57,27 @@ public:
     }
     void update(const char *str, size_t length) {
         this->length = length;
-        this->rlength = 0;
         memcpy(this->str, str, length);
 
+        render();
+        // this->str[this->length] = '\0';
+    }
+
+    void render() {
+        this->rlength = 0;
         for (size_t i = 0; i < length; i++) {
             if (str[i] == '\t') {
                 for (size_t t = 0; t < TAB_SPACE_LENGTH; t++) rstr[rlength++] = ' ';
             } else rstr[rlength++] = str[i];
         }
-        // this->str[this->length] = '\0';
+    }
+
+    void insertChar(int at, char c) {
+        if (at < 0 || at > length) at = length;
+        memmove(str + at + 1, str + at, length - at + 1);
+        str[at] = c;
+        length++;
+        render();
     }
 };
 
@@ -84,13 +98,13 @@ public:
     EditorRow *editor_rows;
     size_t n_rows;
 
-    char filename[50];
+    char *filename;
     char status_message[100];
     size_t status_message_length;
     time_t status_message_time;
 
     EditorConfig() {
-        filename[0] = '\0';
+        filename = nullptr;
         status_message[0] = '\0';
         status_message_length = 0;
         status_message_time = 0;
@@ -205,6 +219,8 @@ void editorDrawRows() {
             // negative number may occur here, so int must be used
             int row_length = min(int(config.terminal_width), max(0, int(config.editor_rows[i].rlength) - int(config.offset_x)));
             write_buffer.append(config.editor_rows[i].rstr + config.offset_x, row_length);
+            if (row_length < config.terminal_width)
+                write_buffer.append("\033[K", 3); // erase from cursor to end of line
         } else {
             if (config.n_rows == 0 && i == config.text_height / 3) {
                 char welcome[60];
@@ -224,9 +240,8 @@ void editorDrawRows() {
             } else {
                 write_buffer.append("~", 1);
             }
+            write_buffer.append("\033[K", 3);
         }
-
-        write_buffer.append("\033[K", 3); // erase from cursor to end of line
         // write(STDOUT_FILENO, "~", 1);
         if (dy != config.text_height - 1) {
             write_buffer.append("\r\n", 2);
@@ -245,7 +260,7 @@ void editorDrawStatusBar() {
     size_t status_length = snprintf(
         status, sizeof(status),
         "%.20s - %lu lines",
-        config.filename[0] ? config.filename : "[No Name]", config.n_rows
+        config.filename != nullptr ? config.filename : "[No Name]", config.n_rows
     );
     status_length = min(status_length, config.terminal_width);
     write_buffer.append(status, status_length);
@@ -284,9 +299,8 @@ void editorDrawMessageBar() {
     write_buffer.append("\r\n", 2);
     if (config.status_message_length && time(NULL) - config.status_message_time < 5) {
         write_buffer.append(config.status_message, config.status_message_length);
-    } else {
-        write_buffer.append("\033[K", 3);
     }
+    write_buffer.append("\033[K", 3);
 #ifdef DEBUG
     write_buffer.writeBuffer();
 #endif
@@ -368,27 +382,28 @@ void editorCursorHorizontalCheck() {
     size_t maxlen = config.getMaxLength();
     if (config.getCurrentX() >= maxlen) {
         if (config.getCurrentX() < config.terminal_width) {
-            config.cursor_x = max(0, int(maxlen) - int(config.offset_x) - 1);
+            config.cursor_x = max(0, int(maxlen) - int(config.offset_x));
             config.offset_x = 0;
         } else {
-            config.offset_x = max(0, int(maxlen) - int(config.terminal_width));
-            config.cursor_x = maxlen - config.offset_x - 1;
+            // edit mode: maxlen + 1
+            config.offset_x = max(0, int(maxlen + 1) - int(config.terminal_width));
+            config.cursor_x = maxlen - config.offset_x;
         }
     }
 }
 
 void editorMoveCursor(int key) {
     switch (key) {
-        case 'j':
+        // case 'j':
         case CURSOR_DOWN:
             if (config.cursor_y < config.text_height - 1) {
                 config.cursor_y++;
             } else {
-                if (config.offset_y < config.n_rows - 1) config.offset_y++;
+                if (config.getCurrentY() < config.n_rows - 1) config.offset_y++;
             }
             editorCursorHorizontalCheck();
             break;
-        case 'k':
+        // case 'k':
         case CURSOR_UP:
             if (config.cursor_y > 0) {
                 config.cursor_y--;
@@ -397,7 +412,7 @@ void editorMoveCursor(int key) {
             }
             editorCursorHorizontalCheck();
             break;
-        case 'h':
+        // case 'h':
         case CURSOR_LEFT:
             if (config.cursor_x > 0) {
                 config.cursor_x--;
@@ -405,26 +420,67 @@ void editorMoveCursor(int key) {
                 if (config.offset_x > 0) config.offset_x--;
             }
             break;
-        case 'l':
+        // case 'l':
         case CURSOR_RIGHT:
-            if (config.getCurrentX() + 1 < config.getMaxLength()) {
-                if (config.cursor_x < config.terminal_width - 1) {
+            if (config.getCurrentX() < config.getMaxLength()) {
+                if (config.cursor_x + 1 < config.terminal_width) {
                     config.cursor_x++;
                 } else {
-                    if (config.getCurrentX() < config.getMaxLength() - 1) config.offset_x++;
+                    if (config.getCurrentX() < config.getMaxLength()) config.offset_x++;
                 }
             }
             break;
     }
 }
 
+void editorInsertChar(char ch) {
+    config.editor_rows[config.getCurrentY()].insertChar(config.getCurrentX(), ch);
+    editorMoveCursor(CURSOR_RIGHT);
+}
+
+char *editorRowsToString(size_t &text_length) {
+    text_length = 0;
+    for (size_t i = 0; i < config.n_rows; i++) {
+        text_length += config.editor_rows[i].length + 1; // 1 for '\n'
+    }
+    char *ret = new char[text_length];
+    char *ptr = ret;
+    for (size_t i = 0; i < config.n_rows; i++) {
+        memcpy(ptr, config.editor_rows[i].str, config.editor_rows[i].length);
+        ptr += config.editor_rows[i].length;
+        *ptr = '\n';
+        ptr++;
+    }
+    ret[text_length] = '\0';
+    return ret;
+}
+
+void editorSave() {
+    if (config.filename == nullptr) return;
+    size_t total_length = 0;
+    char *total_str = editorRowsToString(total_length);
+
+    int fd = open(config.filename, O_RDWR | O_CREAT, 0644);
+    if (fd != -1 && ftruncate(fd, total_length) != -1) {
+        write(fd, total_str, total_length);
+        close(fd);
+        free(total_str);
+        editorSetStatusMessage("Save successfully");
+    } else {
+        editorSetStatusMessage("Save failed");
+    }
+
+    // free(config.filename);
+    // config.filename = nullptr;
+}
+
 void editorProcessKey(int key) {
     // printAsOutput(ch);
     switch (key) {
-        case 'h':
-        case 'j':
-        case 'k':
-        case 'l':
+        // case 'h':
+        // case 'j':
+        // case 'k':
+        // case 'l':
         case CURSOR_UP:
         case CURSOR_DOWN:
         case CURSOR_LEFT:
@@ -448,7 +504,7 @@ void editorProcessKey(int key) {
                     config.cursor_x = config.terminal_width - 1;
                 } else {
                     config.offset_x = 0;
-                    config.cursor_x = maxlen - 1;
+                    config.cursor_x = maxlen;
                 }
             }
             // config.cursor_x = config.terminal_width - 1;
@@ -460,6 +516,23 @@ void editorProcessKey(int key) {
             // write(STDOUT_FILENO, "\033[H", 3);
             write_buffer.writeBuffer();
             exit(0);
+            break;
+        case CTRL_KEY('s'):
+            editorSave();
+        case '\r':
+            // TODO
+            break;
+        case BACKSPACE:
+        case DELETE:
+        case CTRL_KEY('h'):
+            // TODO
+            break;
+        case '\033':
+        case CTRL_KEY('l'):
+            // TODO
+            break;
+        default:
+            editorInsertChar(key);
             break;
     }
 }
@@ -485,13 +558,16 @@ void editorInit() {
     config.offset_x = 0;
     config.offset_y = 0;
 
-    editorSetStatusMessage("Help: ctrl+q = quit");
+    editorSetStatusMessage("Help: ctrl+q = quit, ctrl+s = save");
 
 }
 
-// only read one line
 void editorOpen(const char *filename) {
+    // strcpy(config.filename, filename);
+    size_t filename_length = strlen(filename);
+    config.filename = new char[filename_length + 1];
     strcpy(config.filename, filename);
+
     FILE *fp = fopen(filename, "r");
     if (fp == nullptr) die("fopen");
     char *line = nullptr;
@@ -510,7 +586,7 @@ int main(int argc, char **argv) {
     if (argc >= 2) {
         editorOpen(argv[1]);
     } else {
-        editorOpen("main.cpp");
+        editorOpen("a.txt");
     }
     while (1) {
         editorRefreshScreen();
