@@ -79,6 +79,13 @@ public:
         length++;
         render();
     }
+
+    void deleteChar(int at) {
+        if (at < 0 || at >= length) return;
+        memmove(str + at, str + at + 1, length - at);
+        length--;
+        render();
+    }
 };
 
 class EditorConfig {
@@ -103,11 +110,14 @@ public:
     size_t status_message_length;
     time_t status_message_time;
 
+    bool dirty; // true when modified but not saved yet
+
     EditorConfig() {
         filename = nullptr;
         status_message[0] = '\0';
         status_message_length = 0;
         status_message_time = 0;
+        dirty = false;
     }
 
     // 0-based
@@ -122,6 +132,10 @@ public:
 
     size_t getMaxLength() const {
         return editor_rows[getCurrentY()].rlength;
+    }
+
+    EditorRow *getCurrentRow() {
+        return editor_rows + getCurrentY();
     }
 };
 
@@ -259,8 +273,9 @@ void editorDrawStatusBar() {
     char status[80];
     size_t status_length = snprintf(
         status, sizeof(status),
-        "%.20s - %lu lines",
-        config.filename != nullptr ? config.filename : "[No Name]", config.n_rows
+        "%.20s - %lu lines %s",
+        config.filename != nullptr ? config.filename : "[No Name]", config.n_rows,
+        config.dirty ? "(modified)" : ""
     );
     status_length = min(status_length, config.terminal_width);
     write_buffer.append(status, status_length);
@@ -436,6 +451,17 @@ void editorMoveCursor(int key) {
 void editorInsertChar(char ch) {
     config.editor_rows[config.getCurrentY()].insertChar(config.getCurrentX(), ch);
     editorMoveCursor(CURSOR_RIGHT);
+    config.dirty = true;
+}
+
+void editorDeleteChar(bool backspace) {
+    if (backspace) {
+        config.editor_rows[config.getCurrentY()].deleteChar(config.getCurrentX() - 1);
+        editorMoveCursor(CURSOR_LEFT);
+    } else {
+        config.editor_rows[config.getCurrentY()].deleteChar(config.getCurrentX());
+    }
+    config.dirty = true;
 }
 
 char *editorRowsToString(size_t &text_length) {
@@ -465,9 +491,10 @@ void editorSave() {
         write(fd, total_str, total_length);
         close(fd);
         free(total_str);
-        editorSetStatusMessage("Save successfully");
+        config.dirty = false;
+        editorSetStatusMessage("Saved");
     } else {
-        editorSetStatusMessage("Save failed");
+        editorSetStatusMessage("Failed to save");
     }
 
     // free(config.filename);
@@ -476,6 +503,7 @@ void editorSave() {
 
 void editorProcessKey(int key) {
     // printAsOutput(ch);
+    static bool first = true;
     switch (key) {
         // case 'h':
         // case 'j':
@@ -510,6 +538,11 @@ void editorProcessKey(int key) {
             // config.cursor_x = config.terminal_width - 1;
             break;
         case CTRL_KEY('q'):
+            if (first && config.dirty) {
+                editorSetStatusMessage("WARNING! File has unsaved changes. Press again to exit.");
+                first = false;
+                break;
+            }
             write_buffer.append("\033[2J", 4);
             // write(STDOUT_FILENO, "\033[2J", 4);
             write_buffer.append("\033[H", 3);
@@ -523,12 +556,14 @@ void editorProcessKey(int key) {
             // TODO
             break;
         case BACKSPACE:
+            editorDeleteChar(true);
+            break;
         case DELETE:
-        case CTRL_KEY('h'):
-            // TODO
+        // case CTRL_KEY('h'):
+            editorDeleteChar(false);
             break;
         case '\033':
-        case CTRL_KEY('l'):
+        // case CTRL_KEY('l'):
             // TODO
             break;
         default:
@@ -579,6 +614,7 @@ void editorOpen(const char *filename) {
     }
     free(line);
     fclose(fp);
+    config.dirty = false;
 }
 
 int main(int argc, char **argv) {
