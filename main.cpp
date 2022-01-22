@@ -305,7 +305,7 @@ void editorDrawStatusBar() {
     char status[80];
     int status_length = snprintf(
         status, sizeof(status),
-        "%.20s - %lu lines %s",
+        "%.20s - %d lines %s",
         config.filename != nullptr ? config.filename : "[No Name]", config.n_rows,
         config.dirty ? "(modified)" : ""
     );
@@ -315,7 +315,7 @@ void editorDrawStatusBar() {
     char current_status[80];
     int current_status_length = snprintf(
         current_status, sizeof(current_status),
-        "%lu, %lu", config.getCurrentY(), config.getCurrentX()
+        "%d, %d", config.getCurrentY(), config.getCurrentX()
     );
     if (current_status_length + status_length < config.terminal_width) {
         for (int t = 0; t < config.terminal_width - status_length - current_status_length; t++)
@@ -368,7 +368,7 @@ void editorRefreshScreen() {
     char temp[30];
     int temp_length = snprintf(
             temp, sizeof(temp),
-            "\033[%lu;%luH", config.cursor_y + 1, config.cursor_x + 1
+            "\033[%d;%dH", config.cursor_y + 1, config.cursor_x + 1
     );
     write_buffer.append(temp, temp_length);
 
@@ -746,7 +746,7 @@ void getTerminalSize() {
     write(STDOUT_FILENO, "\033[6n", 4);
     char str[20];
     read(STDIN_FILENO, str, 20);
-    sscanf(str, "\033[%lu;%luR", &config.terminal_height, &config.terminal_width);
+    sscanf(str, "\033[%d;%dR", &config.terminal_height, &config.terminal_width);
     config.text_height = config.terminal_height - 2;
     write(STDOUT_FILENO, "\033[2J", 4);
     write(STDOUT_FILENO, "\033[H", 3);
