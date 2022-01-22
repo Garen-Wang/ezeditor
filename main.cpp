@@ -1,3 +1,14 @@
+/**
+ * @brief ezeditor
+ * 
+ * @param argc 
+ * @param argv 
+ * @return int 
+ * 
+ * known bugs:
+ * - delete tabs
+ */
+
 #include <termios.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -26,12 +37,14 @@ T min(T a, T b) {
 }
 
 const char *VERSION = "0.0.1 alpha";
-const size_t MAXLINE = 1000;
-const size_t MAXLEN = 1000;
-const size_t MAXBUF = 128;
-const size_t TAB_SPACE_LENGTH = 4;
+const int MAXLINE = 1000;
+const int MAXLEN = 1000;
+const int MAXBUF = 128;
+const int TAB_SPACE_LENGTH = 4;
 
 enum editor_keys {
+    UP_LINE_FEED = -369,
+    DOWN_LINE_FEED = 369,
     BACKSPACE = 127,
     CURSOR_UP = 1314,
     CURSOR_DOWN,
@@ -47,15 +60,15 @@ enum editor_keys {
 class EditorRow {
 public:
     char str[MAXLEN];
-    size_t length;
+    int length;
     char rstr[MAXLEN];
-    size_t rlength;
+    int rlength;
 
     EditorRow(): length(0), rlength(0) {}
-    EditorRow(const char *str, size_t length) {
+    EditorRow(const char *str, int length) {
         update(str, length);
     }
-    void update(const char *str, size_t length) {
+    void update(const char *str, int length) {
         this->length = length;
         memcpy(this->str, str, length);
 
@@ -65,9 +78,9 @@ public:
 
     void render() {
         this->rlength = 0;
-        for (size_t i = 0; i < length; i++) {
+        for (int i = 0; i < length; i++) {
             if (str[i] == '\t') {
-                for (size_t t = 0; t < TAB_SPACE_LENGTH; t++) rstr[rlength++] = ' ';
+                for (int t = 0; t < TAB_SPACE_LENGTH; t++) rstr[rlength++] = ' ';
             } else rstr[rlength++] = str[i];
         }
     }
@@ -80,10 +93,29 @@ public:
         render();
     }
 
-    void deleteChar(int at) {
-        if (at < 0 || at >= length) return;
+    int deleteChar(int at) {
+        if (at < 0) return UP_LINE_FEED;
+        else if (at >= length) return DOWN_LINE_FEED;
+        char ret = str[at];
         memmove(str + at, str + at + 1, length - at);
         length--;
+        render();
+        return ret;
+    }
+
+    void deleteRow() {
+        length = rlength = 0;
+    }
+
+    void appendString(char *s, int len) {
+        memcpy(str + length, s, len);
+        length += len;
+        render();
+    }
+
+    void shrinkString(int len) {
+        if (length < len) return;
+        length -= len;
         render();
     }
 };
@@ -92,22 +124,22 @@ class EditorConfig {
 public:
     termios original_termios;
 
-    size_t terminal_height; // 24
-    size_t terminal_width; // 80
-    size_t text_height; // 23
+    int terminal_height; // 24
+    int terminal_width; // 80
+    int text_height; // 23
 
-    size_t cursor_x; // 0-based
-    size_t cursor_y; // 0-based
+    int cursor_x; // 0-based
+    int cursor_y; // 0-based
 
-    size_t offset_x; // 0-based
-    size_t offset_y; // 0-based
+    int offset_x; // 0-based
+    int offset_y; // 0-based
 
     EditorRow *editor_rows;
-    size_t n_rows;
+    int n_rows;
 
     char *filename;
     char status_message[100];
-    size_t status_message_length;
+    int status_message_length;
     time_t status_message_time;
 
     bool dirty; // true when modified but not saved yet
@@ -121,42 +153,42 @@ public:
     }
 
     // 0-based
-    size_t getCurrentY() const {
+    int getCurrentY() const {
         return cursor_y + offset_y;
     }
     
     // 0-based
-    size_t getCurrentX() const {
+    int getCurrentX() const {
         return cursor_x + offset_x;
-    }
-
-    size_t getMaxLength() const {
-        return editor_rows[getCurrentY()].rlength;
     }
 
     EditorRow *getCurrentRow() {
         return editor_rows + getCurrentY();
+    }
+
+    int getMaxLength() {
+        return getCurrentRow()->rlength;
     }
 };
 
 class WriteBuffer {
 private:
     char buf[MAXBUF];
-    size_t length;
+    int length;
 public:
     WriteBuffer(): length(0) {
     }
 
-    WriteBuffer(const char *str, size_t length): length(0) {
+    WriteBuffer(const char *str, int length): length(0) {
         update(str, length);
     }
 
-    void update(const char *str, size_t length) {
+    void update(const char *str, int length) {
         memcpy(buf + this->length, str, length);
         this->length += length;
     }
 
-    void append(const char *str, size_t length) {
+    void append(const char *str, int length) {
         if (this->length + length > MAXBUF) {
             writeBuffer();
             this->length = 0;
@@ -224,26 +256,26 @@ void printAsOutput(char ch) {
 }
 
 void editorDrawRows() {
-    for (size_t dy = 0; dy < config.text_height; dy++) {
-        size_t i = dy + config.offset_y;
+    for (int dy = 0; dy < config.text_height; dy++) {
+        int i = dy + config.offset_y;
         if (i < config.n_rows) {
             // size_t row_length = min(config.terminal_width, config.editor_rows[i].length);
             // write_buffer.append(config.editor_rows[i].str, row_length);
 
             // negative number may occur here, so int must be used
-            int row_length = min(int(config.terminal_width), max(0, int(config.editor_rows[i].rlength) - int(config.offset_x)));
+            int row_length = min(config.terminal_width, max(0, config.editor_rows[i].rlength - config.offset_x));
             write_buffer.append(config.editor_rows[i].rstr + config.offset_x, row_length);
             if (row_length < config.terminal_width)
                 write_buffer.append("\033[K", 3); // erase from cursor to end of line
         } else {
             if (config.n_rows == 0 && i == config.text_height / 3) {
                 char welcome[60];
-                size_t welcome_length = snprintf(
+                int welcome_length = snprintf(
                     welcome, sizeof(welcome),
                     "Garen's Editor: Version %s", VERSION
                 );
                 welcome_length = min(welcome_length, config.terminal_width);
-                size_t padding = (config.terminal_width - welcome_length) / 2;
+                int padding = (config.terminal_width - welcome_length) / 2;
                 if (padding >= 1) {
                     write_buffer.append("~", 1);
                     padding--;
@@ -271,7 +303,7 @@ void editorDrawStatusBar() {
     write_buffer.append("\r\n", 2);
     write_buffer.append("\033[7m", 4);
     char status[80];
-    size_t status_length = snprintf(
+    int status_length = snprintf(
         status, sizeof(status),
         "%.20s - %lu lines %s",
         config.filename != nullptr ? config.filename : "[No Name]", config.n_rows,
@@ -281,16 +313,16 @@ void editorDrawStatusBar() {
     write_buffer.append(status, status_length);
 
     char current_status[80];
-    size_t current_status_length = snprintf(
+    int current_status_length = snprintf(
         current_status, sizeof(current_status),
         "%lu, %lu", config.getCurrentY(), config.getCurrentX()
     );
     if (current_status_length + status_length < config.terminal_width) {
-        for (size_t t = 0; t < config.terminal_width - status_length - current_status_length; t++)
+        for (int t = 0; t < config.terminal_width - status_length - current_status_length; t++)
             write_buffer.append(" ", 1);
         write_buffer.append(current_status, current_status_length);
     } else {
-        for (size_t t = 0; t < config.terminal_width - status_length; t++)
+        for (int t = 0; t < config.terminal_width - status_length; t++)
             write_buffer.append(" ", 1);
     }
     write_buffer.append("\033[m", 3);
@@ -334,7 +366,7 @@ void editorRefreshScreen() {
 
     // write_buffer.append("\033[H", 3);
     char temp[30];
-    size_t temp_length = snprintf(
+    int temp_length = snprintf(
             temp, sizeof(temp),
             "\033[%lu;%luH", config.cursor_y + 1, config.cursor_x + 1
     );
@@ -393,15 +425,89 @@ int editorReadKey() {
     return ch;
 }
 
+// WARNING: might return nullptr
+char *editorPrompt(const char *format) {
+    char *buf = new char[MAXLINE];
+    int len = 0;
+    while (1) {
+        editorSetStatusMessage(format, buf);
+        editorRefreshScreen();
+
+        int key = editorReadKey();
+        if (key == '\033') {
+            editorSetStatusMessage("");
+            free(buf);
+            return nullptr;
+        } else if (key == BACKSPACE || key == CTRL_KEY('h')) {
+            if (len > 0) buf[--len] = '\0';
+        } else if (key == '\r') {
+            if (len != 0) {
+                editorSetStatusMessage("");
+                return buf;
+            }
+        } else if (!iscntrl(key) && key < 128 && key > 0) {
+            if (len == MAXLINE) {
+                return buf;
+            }
+            buf[len++] = key;
+            buf[len] = '\0';
+        }
+    }
+}
+
+bool editorSetCursorX(int x) {
+    if (x >= 0 && x <= config.editor_rows[config.getCurrentY()].length) {
+        int now_x = config.getCurrentX();
+        if (x < now_x) {
+            if (now_x - x <= config.cursor_x) {
+                config.cursor_x -= now_x - x;
+            } else {
+                config.offset_x -= now_x - x - config.cursor_x;
+                config.cursor_x = 0;
+            }
+        } else {
+            if (x - now_x <= config.terminal_width - 1 - config.cursor_x) {
+                config.cursor_x += x - now_x;
+            } else {
+                config.offset_x += x - now_x - (config.terminal_width - 1 - config.cursor_x);
+                config.cursor_x = config.terminal_width - 1;
+            }
+        }
+        return true;
+    } else return false;
+}
+
+bool editorSetCursorY(int y) {
+    if (y < 0 || y > config.editor_rows[config.getCurrentY()].length) {
+        int now_y = config.getCurrentY();
+        if (y < now_y) {
+            if (now_y - y <= config.cursor_y) {
+                config.cursor_y -= now_y - y;
+            } else {
+                config.offset_y -= now_y - y - config.cursor_y;
+                config.cursor_y = 0;
+            }
+        } else {
+            if (y - now_y <= config.terminal_height - 1 - config.cursor_y) {
+                config.cursor_y += y - now_y;
+            } else {
+                config.offset_y += y - now_y - (config.terminal_height - 1 - config.cursor_y);
+                config.cursor_y = config.terminal_height - 1;
+            }
+        }
+        return true;
+    } else return false;
+}
+
 void editorCursorHorizontalCheck() {
-    size_t maxlen = config.getMaxLength();
+    int maxlen = config.getMaxLength();
     if (config.getCurrentX() >= maxlen) {
         if (config.getCurrentX() < config.terminal_width) {
-            config.cursor_x = max(0, int(maxlen) - int(config.offset_x));
+            config.cursor_x = max(0, maxlen - config.offset_x);
             config.offset_x = 0;
         } else {
             // edit mode: maxlen + 1
-            config.offset_x = max(0, int(maxlen + 1) - int(config.terminal_width));
+            config.offset_x = max(0, maxlen + 1 - config.terminal_width);
             config.cursor_x = maxlen - config.offset_x;
         }
     }
@@ -411,10 +517,12 @@ void editorMoveCursor(int key) {
     switch (key) {
         // case 'j':
         case CURSOR_DOWN:
-            if (config.cursor_y < config.text_height - 1) {
-                config.cursor_y++;
-            } else {
-                if (config.getCurrentY() < config.n_rows - 1) config.offset_y++;
+            if (config.getCurrentY() < config.n_rows - 1) {
+                if (config.cursor_y < config.text_height - 1) {
+                    config.cursor_y++;
+                } else {
+                    config.offset_y++;
+                }
             }
             editorCursorHorizontalCheck();
             break;
@@ -449,29 +557,83 @@ void editorMoveCursor(int key) {
 }
 
 void editorInsertChar(char ch) {
+    if (config.n_rows == 0) config.n_rows = 1;
     config.editor_rows[config.getCurrentY()].insertChar(config.getCurrentX(), ch);
     editorMoveCursor(CURSOR_RIGHT);
     config.dirty = true;
 }
 
+void editorDeleteRow(int at) {
+    if (at < 0 || at >= config.n_rows) return;
+    config.editor_rows[at].deleteRow();
+    memmove(config.editor_rows + at, config.editor_rows + at + 1, sizeof(EditorRow) * (config.n_rows - at - 1));
+    config.n_rows--;
+    config.dirty = true;
+}
+
+void editorInsertRow(int at) {
+    if (at < 0 || at > config.n_rows) return;
+    memmove(config.editor_rows + at + 1, config.editor_rows + at, sizeof(EditorRow) * (config.n_rows - at));
+    config.editor_rows[at].deleteRow();
+    config.n_rows++;
+    config.dirty = true;
+}
+
 void editorDeleteChar(bool backspace) {
+    int ch = 0;
     if (backspace) {
-        config.editor_rows[config.getCurrentY()].deleteChar(config.getCurrentX() - 1);
-        editorMoveCursor(CURSOR_LEFT);
+        int y = config.getCurrentY();
+        ch = config.editor_rows[y].deleteChar(config.getCurrentX() - 1);
+        if (ch == UP_LINE_FEED && y > 0) {
+            int idx = config.editor_rows[y - 1].length;
+            config.editor_rows[y - 1].appendString(
+                config.editor_rows[y].str,
+                config.editor_rows[y].length
+            );
+            editorDeleteRow(y);
+            editorMoveCursor(CURSOR_UP);
+            editorSetCursorX(idx);
+        } else {
+            editorMoveCursor(CURSOR_LEFT);
+        }
     } else {
-        config.editor_rows[config.getCurrentY()].deleteChar(config.getCurrentX());
+        int y = config.getCurrentY();
+        ch = config.editor_rows[y].deleteChar(config.getCurrentX());
+        if (ch == DOWN_LINE_FEED && y < config.n_rows - 1) {
+            config.editor_rows[y].appendString(
+                config.editor_rows[y + 1].str,
+                config.editor_rows[y + 1].length
+            );
+            editorDeleteRow(y + 1);
+        }
     }
     config.dirty = true;
 }
 
-char *editorRowsToString(size_t &text_length) {
+void editorInsertNewline() {
+    int x = config.getCurrentX();
+    int y = config.getCurrentY();
+    int len = config.editor_rows[y].length - x;
+    editorInsertRow(y + 1);
+    config.editor_rows[y + 1].appendString(
+        config.editor_rows[y].str + x,
+        len
+    );
+    config.editor_rows[y].shrinkString(len);
+    // editorSetCursorX(0);
+    // editorSetCursorY(y + 1);
+    editorMoveCursor(CURSOR_DOWN);
+    editorSetCursorX(0);
+}
+
+char *editorRowsToString(int &text_length) {
     text_length = 0;
-    for (size_t i = 0; i < config.n_rows; i++) {
+    for (int i = 0; i < config.n_rows; i++) {
         text_length += config.editor_rows[i].length + 1; // 1 for '\n'
     }
     char *ret = new char[text_length];
     char *ptr = ret;
-    for (size_t i = 0; i < config.n_rows; i++) {
+    for (int i = 0; i < config.n_rows; i++) {
         memcpy(ptr, config.editor_rows[i].str, config.editor_rows[i].length);
         ptr += config.editor_rows[i].length;
         *ptr = '\n';
@@ -482,8 +644,14 @@ char *editorRowsToString(size_t &text_length) {
 }
 
 void editorSave() {
-    if (config.filename == nullptr) return;
-    size_t total_length = 0;
+    if (config.filename == nullptr) {
+        config.filename = editorPrompt("Save as: %s");
+        if (config.filename == nullptr) {
+            editorSetStatusMessage("Save aborted");
+            return;
+        }
+    }
+    int total_length = 0;
     char *total_str = editorRowsToString(total_length);
 
     int fd = open(config.filename, O_RDWR | O_CREAT, 0644);
@@ -517,7 +685,7 @@ void editorProcessKey(int key) {
             break;
         case PAGE_UP:
         case PAGE_DOWN:
-            for (size_t i = 0; i < config.terminal_height; i++) {
+            for (int i = 0; i < config.terminal_height; i++) {
                 editorMoveCursor(key == PAGE_UP ? CURSOR_UP : CURSOR_DOWN);
             }
             break;
@@ -526,7 +694,7 @@ void editorProcessKey(int key) {
             break;
         case END:
             {
-                size_t maxlen = config.getMaxLength();
+                int maxlen = config.getMaxLength();
                 if (maxlen > config.terminal_width) {
                     config.offset_x = maxlen - config.terminal_width;
                     config.cursor_x = config.terminal_width - 1;
@@ -552,8 +720,9 @@ void editorProcessKey(int key) {
             break;
         case CTRL_KEY('s'):
             editorSave();
+            break;
         case '\r':
-            // TODO
+            editorInsertNewline();
             break;
         case BACKSPACE:
             editorDeleteChar(true);
@@ -622,7 +791,7 @@ int main(int argc, char **argv) {
     if (argc >= 2) {
         editorOpen(argv[1]);
     } else {
-        editorOpen("a.txt");
+        // editorOpen("a.txt");
     }
     while (1) {
         editorRefreshScreen();
