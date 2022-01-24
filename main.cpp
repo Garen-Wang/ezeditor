@@ -429,6 +429,7 @@ int editorReadKey() {
 char *editorPrompt(const char *format) {
     char *buf = new char[MAXLINE];
     int len = 0;
+    buf[len] = '\0';
     while (1) {
         editorSetStatusMessage(format, buf);
         editorRefreshScreen();
@@ -669,6 +670,20 @@ void editorSave() {
     // config.filename = nullptr;
 }
 
+void editorSearch() {
+    char *query = editorPrompt("Search (ESC to cancel): %s");
+    if (query == nullptr) return;
+    for (int i = config.getCurrentY(); i < config.n_rows; i++) {
+        EditorRow row = config.editor_rows[i];
+        char *match = strstr(row.rstr, query);
+        if (match != nullptr) {
+            editorSetStatusMessage("Found! %d, %d", i, match - row.rstr);
+            break;
+        }
+    }
+    free(query);
+}
+
 void editorProcessKey(int key) {
     // printAsOutput(ch);
     static bool first = true;
@@ -721,6 +736,9 @@ void editorProcessKey(int key) {
         case CTRL_KEY('s'):
             editorSave();
             break;
+        case CTRL_KEY('f'):
+            editorSearch();
+            break;
         case '\r':
             editorInsertNewline();
             break;
@@ -762,7 +780,7 @@ void editorInit() {
     config.offset_x = 0;
     config.offset_y = 0;
 
-    editorSetStatusMessage("Help: ctrl+q = quit, ctrl+s = save");
+    editorSetStatusMessage("Help: ctrl+q=quit, ctrl+s=save, ctrl+f=search");
 
 }
 
